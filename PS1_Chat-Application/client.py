@@ -6,123 +6,88 @@ import select
 import termios
 import tty
 
-HOST, PORT = "localhost", int(sys.argv[1])
+HOST = "localhost"
+if len(sys.argv) > 1:
+    PORT = int(sys.argv[1])
+else:
+    PORT = 9999
 
 class Client():
     # SOCK_DGRAM is the socket type to use for UDP sockets
-    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock = None
 
     def __init__(self):
+        # set a timeout of 1 second so we can detect server inactivity
+        socket.setdefaulttimeout(1)
+
+        # SOCK_DGRAM is the socket type to use for UDP sockets
+        self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+
         self.greet_server()
 
     def greet_server(self):
-        self.sock.sendto("GREETING", (HOST, PORT))
-        received = self.sock.recv(1024)
-        if "INCOMING:" in received:
-            print received[9:]
+        self.send_helper("GREETING", "")
 
     def send_message(self, msg):
-        self.sock.sendto("MESSAGE:" + msg, (HOST, PORT))
-        received = self.sock.recv(1024)
-        if "INCOMING:" in received:
-            print received[9:]
+        self.send_helper("MESSAGE:", msg)
 
+    # used as a general way to send messages to the server
+    # checks for socket timeouts to detect inactive server
+    def send_helper(self, prefix, msg):
+        try:
+            self.sock.sendto(prefix + msg, (HOST, PORT))
+            received = self.sock.recv(1024)
+            self.print_message(received)
+
+        except socket.timeout as e:
+            print "Server is not responding"
+            sys.exit()
+
+    # Print incoming messages to the terminal, has options for line breaks
+    def print_message(self, msg, lb_before=False, lb_after=False):
+        if "INCOMING:" in msg:
+            if lb_before:
+                print '\n' + msg[9:]
+            elif lb_after:
+                print msg[9:] + '\n'
+            else:
+                print msg[9:]
+
+# User input prompt
 def prompt():
     sys.stdout.write('-> ')
     sys.stdout.flush()
-
-def get_cursor_pos():
-    # Save stdin configuration
-    fd = sys.stdin.fileno()
-    settings = termios.tcgetattr(fd)
-
-    # Set stdin to raw mode
-    tty.setraw(fd)
-
-    # Request cursor position
-    sys.stdout.write("\033[6n")
-
-    # Read response one char at a time until 'R'
-    resp = char = ""
-
-    try:
-        while char != 'R':
-            resp += char
-            char = sys.stdin.read(1)
-    finally:
-        # Restore # previous # stdin # configuration
-        termios.tcsetattr(fd, termios.TCSADRAIN, settings)
-
-        # Split # answer # in # two # and # return # COL # and # ROW # as # tuple
-        return tuple([int(i) for i in resp[2:].split(';')])
-
-# 
-def read_curr_word():
-    # Save stdin configuration
-    fd = sys.stdin.fileno()
-    settings = termios.tcgetattr(fd)
-
-    # Set stdin to raw mode
-    tty.setraw(fd)
-
-    # Read response one char at a time until 'R'
-    resp = char = "a"
-
-    try:
-        resp = sys.stdin.read(4)
-    finally:
-        # Restore # previous # stdin # configuration
-        termios.tcsetattr(fd, termios.TCSADRAIN, settings)
-
-        # Split # answer # in # two # and # return # COL # and # ROW # as # tuple
-        return resp
 
 c = Client()
 
 # Initial user prompt
 prompt()
 
-# Input and chat-printing loop
+# Input and chat-printing/monitoring loop
 while(1):
-    # create a list of sources to monitor
-    socket_list = [sys.stdin, c.sock]
+    try:
+        # create a list of sources to monitor
+        socket_list = [sys.stdin, c.sock]
 
-    # Get the list sockets which are readable
-    read_sockets, write_sockets, error_sockets = select.select(socket_list , [], [])
+        # Get the list sockets which are readable
+        read_sockets, write_sockets, error_sockets = select.select(socket_list , [], [])
 
-    for sock in read_sockets:
-        #incoming message from remote server
-        if sock == c.sock:
-            data = sock.recv(4096)
-            if not data:
-                print '\nDisconnected from chat server'
-                sys.exit()
-            else:
-                # p'\033[0;0H' + 
-                #print '\033[6n'
-
-                #cp = get_cursor_pos()
-                #print cp
-                #print cp[0]
-                #print cp[1]
-                #print str(cp[1] - 6)
-
-                #move_pos = "\033[" + str(cp[0]) + ";" + str(0) + "H"
-
-                #sys.stdout.flush()
-                #msg = read_curr_word()
-
-                #after_move_pos = "\033[" + str(cp[0]) + ";" + str(len(msg)) + "H"
-
-                if "INCOMING:" in data:
-                    sys.stdout.write(data[9:] + '\n')
-
+        for sock in read_sockets:
+            # Incoming message from remote server
+            if sock == c.sock:
+                data = sock.recv(1024)
+                c.print_message(data, False, True)
                 prompt()
 
-        # user entered a message
-        else:
-            msg = sys.stdin.readline()
-            c.send_message(msg)
-            prompt()
+            # User entered a message
+            else:
+                msg = sys.stdin.readline()
+                c.send_message(msg)
+                prompt()
+
+    except KeyboardInterrupt as msg:
+        print "disconnected"
+        sys.exit()
+
 
 

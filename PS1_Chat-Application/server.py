@@ -10,7 +10,7 @@ else:
     PORT = 9999
 
 """
-A class used to handle UDP messages and act as a socket server
+A class used to handle UDP messages and act as a socket server.
 self.request consists of a pair of data and client sockets. Because
 there is no connection, the client address must be given explicitly
 when sending data back via sendto()
@@ -24,14 +24,14 @@ class UDPHandler(SocketServer.BaseRequestHandler):
         data = self.request[0].strip()
         self.socket = self.request[1]
 
-        if "GREETING" == data:
+        if data == "GREETING":
             self.register_client(self.client_address)
             print "Client registered: " + str(self.client_address)
 
             self.socket.sendto("INCOMING:You are connected to the chat server!",
                                self.client_address)
 
-        elif "MESSAGE:" in data:
+        elif data.startswith("MESSAGE:"):
             self.broadcast_message(data[8:])
 
     # Registers a recognized client with the server
@@ -48,6 +48,15 @@ class UDPHandler(SocketServer.BaseRequestHandler):
             self.socket.sendto(outgoing_msg, addr)
 
 if __name__ == "__main__":
-    server = SocketServer.UDPServer((HOST, PORT), UDPHandler)
-    print "Server Initialized on port " + str(PORT)
-    server.serve_forever()
+    try:
+        server = SocketServer.UDPServer((HOST, PORT), UDPHandler)
+        print "Server Initialized on port " + str(PORT)
+        server.serve_forever()
+    except KeyboardInterrupt:
+        print "shutting down server"
+        server.shutdown()
+    except Exception as e:
+        # Can't access SocketServer's socket, must use string matching instead
+        if "Address already in use" in str(e):
+            print "Port %s is already in use! Please run the server with a different port" % PORT
+
