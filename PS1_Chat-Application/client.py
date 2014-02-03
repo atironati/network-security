@@ -89,5 +89,3 @@ while(1):
         print "disconnected"
         sys.exit()
 
-
-
