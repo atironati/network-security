@@ -29,7 +29,7 @@ class EncryptAction(argparse.Action):
         session_key = Random.new().read( 32 )
         iv          = Random.new().read( 16 )
 
-        # Encrypt session key using PKCS1 OEAP public key crypto
+        # Encrypt session key using PKCS1 OAEP public key crypto
         cipher = PKCS1_OAEP.new(pub_key)
         encrypted_session_key = cipher.encrypt(session_key + iv)
         output_f.write(base64.b64encode(encrypted_session_key) + '\n')
@@ -101,7 +101,6 @@ class DecryptAction(argparse.Action):
         output_f.write( plaintext )
 
         print "Decryption successful!"
-        print plaintext
 
 parser = argparse.ArgumentParser()
 parser.add_argument("-e", "--encrypt",

@@ -6,7 +6,7 @@ from Crypto.PublicKey import RSA
 
 def generate_RSA(bits=2048):
     '''
-    Generate an RSA keypair with an exponent of 65537 in PEM format
+    Generate an RSA keypair with an exponent of 65537 in DER format
     param: bits The key length in bits
     Return private key and public key
     '''
