@@ -5,26 +5,32 @@ import sys
 import select
 import termios
 import tty
+import diffie_hellman
+import getpass
+import base64
+import common
+
+# crypto libraries
+from Crypto.Hash import SHA256
+from Crypto.Cipher import AES
+from Crypto.PublicKey import RSA
+from Crypto.Signature import PKCS1_v1_5
+from Crypto.Cipher import PKCS1_OAEP
+from Crypto import Random # Much stronger than standard python random module
+
+server_pub_key = RSA.importKey(open('server_pub_key.txt', 'r').read().rstrip('\n'))
+pub_key        = RSA.importKey(open('alice_pub.txt', 'r').read().rstrip('\n'))
+priv_key       = RSA.importKey(open('alice_priv.txt', 'r').read().rstrip('\n'))
+
+BS    = 16
+pad   = lambda s : s + (BS - len(s) % BS) * chr(BS - len(s) % BS)
+unpad = lambda s : s[0:-ord(s[-1])]
 
 HOST = "localhost"
 if len(sys.argv) > 1:
     PORT = int(sys.argv[1])
 else:
     PORT = 9999
-
-g = 2
-p = """0xFFFFFFFF FFFFFFFF C90FDAA2 2168C234 C4C6628B 80DC1CD1
-         29024E08 8A67CC74 020BBEA6 3B139B22 514A0879 8E3404DD
-         EF9519B3 CD3A431B 302B0A6D F25F1437 4FE1356D 6D51C245
-         E485B576 625E7EC6 F44C42E9 A637ED6B 0BFF5CB6 F406B7ED
-         EE386BFB 5A899FA5 AE9F2411 7C4B1FE6 49286651 ECE45B3D
-         C2007CB8 A163BF05 98DA4836 1C55D39A 69163FA8 FD24CF5F
-         83655D23 DCA3AD96 1C62F356 208552BB 9ED52907 7096966D
-         670C354E 4ABC9804 F1746C08 CA18217C 32905E46 2E36CE3B
-         E39E772C 180E8603 9B2783A2 EC07A28F B5C55DF0 6F4C52C9
-         DE2BCBF6 95581718 3995497C EA956AE5 15D22618 98FA0510
-         15728E5A 8AACAA68 FFFFFFFF FFFFFFFF"""
-p = int(p.replace(" ",""),0)
 
 class Client():
     # SOCK_DGRAM is the socket type to use for UDP sockets
@@ -40,33 +46,81 @@ class Client():
         self.login_to_server()
 
     def login_to_server(self):
-        self.send_helper("LOGIN", "")
+        sys.stdout.write('Please enter username: ')
+        username = sys.stdin.readline().rstrip('\n')
+        password = SHA256.new(getpass.getpass()).digest()
+        print "pass: " + password
 
-    def send_message(self, msg):
-        self.send_helper("MESSAGE:", msg)
-
-    # used as a general way to send messages to the server
-    # checks for socket timeouts to detect inactive server
-    def send_helper(self, prefix, msg):
         try:
-
-            self.sock.sendto(prefix + msg, (HOST, PORT))
+            self.sock.sendto("LOGIN", (HOST, PORT))
             received = self.sock.recv(1024)
             self.print_message("HEYHEY: " + received)
             dos_cookie = received
-            self.print_message("dos_cookie: " + dos_cookie)
 
-            # compute diffie hellman value encrypted with password hash
+            print "===================="
 
-            encrypted_response_1 = "what"
+            iv2 = Random.new().read( 16 )
+            encoded_iv2 = base64.b64encode(iv2)
 
-            self.sock.sendto("LOGIN," + dos_cookie + "," + encrypted_response_1, (HOST, PORT))
-            received = self.sock.recv(1024)
-            self.print_message(received)
+            # compute diffie hellman value and encrypt with password hash
+            dh = diffie_hellman.DiffieHellman()
+            dh_key = base64.b64encode(str(dh.genPublicKey()))
+
+            plaintext  = pad(str(dh_key))
+            cipher     = AES.new(password, AES.MODE_CBC, iv2)
+            encoded_dh = base64.b64encode(cipher.encrypt(plaintext))
+
+            # Sign the message
+            signature_msg = SHA256.new(str(username) + str(iv2))
+            signer = PKCS1_v1_5.new(priv_key)
+            signature = base64.b64encode( signer.sign(signature_msg) )
+
+            # Encrypt plaintext using AES symmetric encryption
+            encrypt_msg = "%s,%s,%s,%s" % (username, encoded_iv2, signature, encoded_dh)
+            encrypted_keys, ciphertext = common.public_key_encrypt(encrypt_msg, server_pub_key)
+
+            final_msg = "LOGIN," + dos_cookie + "," + encrypted_keys + "," + ciphertext
+            self.sock.sendto(final_msg, (HOST, PORT))
+            data = self.sock.recv(8192).split(',', 2)
+
+            if len(data) != 2 : return None
+
+            msg = common.public_key_decrypt(data[0], data[1], priv_key)
+            iv4       = base64.b64decode( msg[0] )
+            signature = base64.b64decode( msg[1] )
+            encrypted_server_dh_value = base64.b64decode( msg[2] )
+            n3 = base64.b64decode( msg[3] )
+
+            # Verify the signature
+            h = SHA256.new(str(iv4))
+
+            verifier = PKCS1_v1_5.new(server_pub_key)
+            if verifier.verify(h, str(signature)):
+                print "Signature Verified!"
+
+                # Decrypt using AES
+                cipher        = AES.new(password, AES.MODE_CBC, iv4)
+                server_dh_val = long(base64.b64decode(unpad(cipher.decrypt( encrypted_server_dh_value ))))
+
+                print 'server DH VAL'
+                print server_dh_val
+
+                # Generate shared key
+                dh.genKey(server_dh_val)
+                shared_key = dh.getKey()
+                print "shared key"
+                print base64.b64encode(shared_key)
+
+                self.sock.sendto("PENIS", (HOST, PORT))
+                received = self.sock.recv(1024)
+                self.print_message(received)
 
         except socket.timeout as e:
             print "Server is not responding"
             sys.exit()
+
+    def send_message(self, msg):
+        self.send_helper("MESSAGE:", msg)
 
     # Print incoming messages to the terminal, has options for line breaks
     def print_message(self, msg, lb_before=False, lb_after=False):
