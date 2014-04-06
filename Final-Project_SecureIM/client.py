@@ -111,10 +111,6 @@ class Client():
                 print "shared key"
                 print base64.b64encode(shared_key)
 
-                self.sock.sendto("PENIS", (HOST, PORT))
-                received = self.sock.recv(1024)
-                self.print_message(received)
-
         except socket.timeout as e:
             print "Server is not responding"
             sys.exit()
