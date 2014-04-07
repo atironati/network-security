@@ -26,6 +26,9 @@ BS    = 16
 pad   = lambda s : s + (BS - len(s) % BS) * chr(BS - len(s) % BS)
 unpad = lambda s : s[0:-ord(s[-1])]
 
+username = ""
+shared_key = 0
+
 HOST = "localhost"
 if len(sys.argv) > 1:
     PORT = int(sys.argv[1])
@@ -129,6 +132,41 @@ class Client():
             else:
                 print msg[9:]
 
+    # Get a list of connected clients from the server
+    def get_client_list(self):
+        # Send the "LIST" server request
+        self.sock.sendto("LIST", (HOST, PORT))
+
+        # Receive the dos cookie
+        received = self.sock.recv(1024)
+        dos_cookie = received
+
+        # Send the dos cookie back, along with the username
+        msg = "LIST," + dos_cookie + "," + username
+        self.sock.sendto(msg, (HOST, PORT))
+
+        # Receive an encrypted nonce and decrypt it
+        encrypted_nonce = self.sock.recv(1024)
+        decrypted_nonce = common.shared_key_decrypt(encrypted_nonce, shared_key)
+
+        # Create a new nonce and encrypt with the shared key + 1
+        nonce2 = Random.new().read( 32 )
+        encrypted_nonce2 = common.shared_key_encrypt(nonce2, shared_key + 1)
+
+        # Send the decrypted nonce and encrypted second nonce to the server
+        self.sock.sendto(decrypted_nonce + "," + encrypted_nonce2)
+
+        # Receive the client list from the server
+        received = self.sock.recv(8192)
+        data = received.split(',', 1)
+
+        # Check the nonce
+        if data[0] != nonce2 : return
+
+        # Print the client list
+        print_message(self, data[1])
+        
+
 # User input prompt
 def prompt():
     sys.stdout.write('-> ')
@@ -158,8 +196,11 @@ while(1):
             # User entered a message
             else:
                 msg = sys.stdin.readline()
-                c.send_message(msg)
-                prompt()
+                if msg.rstrip('\n') == "list":
+                    c.get_client_list()
+                else:
+                    c.send_message(msg)
+                    prompt()
 
     except KeyboardInterrupt as msg:
         print "disconnected"
