@@ -60,7 +60,7 @@ def public_key_decrypt(encrypted_keys, ciphertext, priv_key):
 
 # Encrypt using AES
 def aes_encrypt(msg, key, iv):
-    plaintext   = pad(str(msg))
+    plaintext   = pad(msg)
     cipher      = AES.new(key, AES.MODE_CBC, iv)
     encoded_msg = base64.b64encode(cipher.encrypt(plaintext))
 
@@ -73,6 +73,7 @@ def aes_decrypt(msg, key, iv):
 
     return decrypted_val
 
+# Sign a message with a private key
 def sign(msg, priv_key):
     signer = PKCS1_v1_5.new(priv_key)
     signature = base64.b64encode( signer.sign(msg) )

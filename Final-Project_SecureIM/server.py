@@ -82,6 +82,7 @@ class UDPHandler(SocketServer.BaseRequestHandler):
                     print "Protocol not found"
 
     def send_dos_cookie(self):
+        print str(self.client_address)
         client_ip = str(self.client_address[0])
 
         plaintext  = pad(client_ip + "," + str(server_secret))
@@ -110,60 +111,83 @@ class UDPHandler(SocketServer.BaseRequestHandler):
     def login_protocol(self, data):
         if len(data) != 2 : return
 
+        # Decrypt message with our private key and break out message
         msg = common.public_key_decrypt(data[0], data[1], server_priv_key)
-        uname     = msg[0].rstrip('\n')
-        iv1       = base64.b64decode( msg[1] )
-        signature = base64.b64decode( msg[2] )
-        encrypted_diff_hell_val = base64.b64decode( msg[3] )
+        uname            = msg[0].rstrip('\n')
+        iv1              = base64.b64decode( msg[1] )
+        signature        = base64.b64decode( msg[2] )
+        encrypted_dh_val = base64.b64decode( msg[3] )
 
+        # Lookup public key of the user
         user_pub_key = self.get_user_pub_key(uname)
 
-        # Verify the signature
+        # Verify the user's signature
         h = SHA256.new(str(uname) + str(iv1))
-
         verifier = PKCS1_v1_5.new(user_pub_key)
+
         if verifier.verify(h, str(signature)):
             print "Signature Verified!"
             pass_hash = base64.b64decode( self.get_password_hash(uname) )
 
-            # Decrypt using AES
-            diff_hell_val = common.aes_decrypt(encrypted_diff_hell_val, pass_hash, iv1)
+            # Decrypt DH val
+            diff_hell_val = long(common.aes_decrypt(encrypted_dh_val, pass_hash, iv1))
 
+            # Create random values
+            nonce1         = Random.new().read( 32 )
+            encoded_nonce1 = base64.b64encode(nonce1)
+            iv2            = Random.new().read( 16 )
+            encoded_iv2    = base64.b64encode(iv2)
+
+            # Compute our diffie hellman value and encrypt with password hash
             dh = diffie_hellman.DiffieHellman()
-            session_key = Random.new().read( 32 )
-            n3  = Random.new().read( 32 )
-            encoded_n3 = base64.b64encode(n3)
-            iv4 = Random.new().read( 16 )
-            encoded_iv4 = base64.b64encode(iv4)
-
-            # compute our diffie hellman value and encrypt with password hash
             serv_dh_key = base64.b64encode(str(dh.genPublicKey()))
-            encoded_serv_dh = long(common.aes_encrypt(str(serv_dh_key), pass_hash, iv4))
+            encoded_serv_dh = common.aes_encrypt(str(serv_dh_key), pass_hash, iv2)
 
-            # Sign the message
-            signature_msg = SHA256.new(str(iv4))
-            signer = PKCS1_v1_5.new(server_priv_key)
-            signature = base64.b64encode( signer.sign(signature_msg) )
-
-            # Encrypt with public key of user
-            encrypt_msg = "%s,%s,%s,%s" % (encoded_iv4, signature, encoded_serv_dh, encoded_n3)
-            encrypted_server_keys, ciphertext = common.public_key_encrypt(encrypt_msg, user_pub_key)
-
-            final_msg = encrypted_server_keys + "," + ciphertext
-            self.socket.sendto(final_msg, self.client_address)
-            received = self.socket.recv(1024)
-            print str(received)
-
-            # establish shared key
+            # Establish shared key
             dh.genKey(diff_hell_val)
             shared_key = dh.getKey()
-
             print 'shared_key'
             print base64.b64encode(shared_key)
 
-            # Keep track of shared key
-            connected_clients[uname]['shared_key'] = shared_key
-            connected_clients[uname]['ip'] = self.client_address[0]
+            # Sign the message
+            signature_msg = SHA256.new(str(iv2))
+            signature     = common.sign(signature_msg, server_priv_key )
+
+            # Encrypt with public key of user
+            encrypt_msg = "%s,%s,%s,%s" % (encoded_iv2, signature, encoded_serv_dh, encoded_nonce1)
+            encrypted_server_keys, ciphertext = common.public_key_encrypt(encrypt_msg, user_pub_key)
+
+            msg = encrypted_server_keys + "," + ciphertext
+            self.socket.sendto(msg, self.client_address)
+            data = self.socket.recv(1024).split(',',2)
+            if len(data) != 2 : return
+
+            msg                   = common.public_key_decrypt(data[0], data[1], server_priv_key)
+            iv3                   = base64.b64decode( msg[0] )
+            encrypted_user_nonce1 = base64.b64decode( msg[1] )
+            nonce2                = base64.b64decode( msg[2] )
+            encoded_nonce2        = base64.b64encode( nonce2 )
+
+            # Verify user nonce1 value matches the value we sent
+            user_nonce1 = common.aes_decrypt(encrypted_user_nonce1, shared_key, iv3)
+
+            if nonce1 == user_nonce1:
+                print "YES!"
+
+                # Keep track of shared key
+                connected_clients[uname]['shared_key'] = shared_key
+                connected_clients[uname]['ip']         = self.client_address[0]
+
+                # Send last message so client can verify our identity/shared key
+                iv4          = Random.new().read( 16 )
+                encoded_iv4  = base64.b64encode( iv4 )
+                encrypted_n2 = common.aes_encrypt(encoded_nonce2, shared_key, iv4)
+
+                encrypt_msg = "%s,%s" % (encoded_iv4, encrypted_n2)
+                encrypted_keys, ciphertext = common.public_key_encrypt(encrypt_msg, user_pub_key)
+
+                msg = encrypted_keys + ',' + ciphertext
+                self.socket.sendto(msg, self.client_address)
 
         else:
             print "The signature is not authentic"

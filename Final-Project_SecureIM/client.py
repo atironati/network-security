@@ -57,53 +57,79 @@ class Client():
             received = self.sock.recv(1024)
             dos_cookie = received
 
-            iv2 = Random.new().read( 16 )
-            encoded_iv2 = base64.b64encode(iv2)
+            iv1         = Random.new().read( 16 )
+            encoded_iv1 = base64.b64encode(iv1)
 
             # compute diffie hellman value and encrypt with password hash
-            dh = diffie_hellman.DiffieHellman()
-            dh_key = base64.b64encode(str(dh.genPublicKey()))
-            encoded_dh = common.aes_encrypt(str(dh_key), password, iv2)
+            dh         = diffie_hellman.DiffieHellman()
+            dh_key     = base64.b64encode(str(dh.genPublicKey()))
+            encoded_dh = common.aes_encrypt(str(dh_key), password, iv1)
 
             # Sign the message
-            signature_msg = SHA256.new(str(username) + str(iv2))
-            signer = PKCS1_v1_5.new(priv_key)
-            signature = base64.b64encode( signer.sign(signature_msg) )
+            signature_msg = SHA256.new(str(username) + str(iv1))
+            signature     = common.sign(signature_msg, priv_key)
 
             # Encrypt plaintext using AES symmetric encryption
-            encrypt_msg = "%s,%s,%s,%s" % (username, encoded_iv2, signature, encoded_dh)
+            encrypt_msg = "%s,%s,%s,%s" % (username, encoded_iv1, signature, encoded_dh)
             encrypted_keys, ciphertext = common.public_key_encrypt(encrypt_msg, server_pub_key)
 
             final_msg = "LOGIN," + dos_cookie + "," + encrypted_keys + "," + ciphertext
+
+            print final_msg
+            self.sock.settimeout(3)
             self.sock.sendto(final_msg, (HOST, PORT))
             data = self.sock.recv(8192).split(',', 2)
-
+            print data
+            print "+++++++++"
+            print str(len(data))
             if len(data) != 2 : return None
 
             msg = common.public_key_decrypt(data[0], data[1], priv_key)
-            iv2       = base64.b64decode( msg[0] )
-            signature = base64.b64decode( msg[1] )
-            encrypted_server_dh_value = base64.b64decode( msg[2] )
-            nonce1 = base64.b64decode( msg[3] )
+            iv2                   = base64.b64decode( msg[0] )
+            signature             = base64.b64decode( msg[1] )
+            encrypted_serv_dh_val = base64.b64decode( msg[2] )
+            nonce1                = base64.b64decode( msg[3] )
+            encoded_nonce1        = base64.b64encode( nonce1 )
 
             # Verify the signature
             h = SHA256.new(str(iv2))
-
             verifier = PKCS1_v1_5.new(server_pub_key)
+
             if verifier.verify(h, str(signature)):
                 print "Signature Verified!"
 
-                # Decrypt using AES
-                server_dh_val = long(common.aes_decrypt(encrypted_server_dh_value, password, iv2))
-
-                print 'server DH VAL'
-                print server_dh_val
+                # Decrypt server dh val
+                server_dh_val = long(common.aes_decrypt(encrypted_serv_dh_val, password, iv2))
 
                 # Generate shared key
                 dh.genKey(server_dh_val)
                 shared_key = dh.getKey()
-                print "shared key"
-                print base64.b64encode(shared_key)
+
+                # Encrypt nonce1 with our shared key
+                nonce2         = Random.new().read( 32 )
+                encoded_nonce2 = base64.b64encode( nonce2 )
+                iv3            = Random.new().read( 16 )
+                encoded_iv3    = base64.b64encode( iv3 )
+                encrypted_n1   = common.aes_encrypt(encoded_nonce1, shared_key, iv3)
+
+                encrypt_msg = "%s,%s,%s" % (encoded_iv3, encrypted_n1, encoded_nonce2)
+                encrypted_keys, ciphertext = common.public_key_encrypt(encrypt_msg, server_pub_key)
+
+                msg = encrypted_keys + ',' + ciphertext
+                self.sock.sendto(msg, (HOST, PORT))
+                data = self.sock.recv(4096).split(',', 2)
+                if len(data) != 2 : return None
+
+                msg                   = common.public_key_decrypt(data[0], data[1], priv_key)
+                iv4                   = base64.b64decode( msg[0] )
+                encrypted_serv_nonce2 = base64.b64decode( msg[1] )
+
+                # Verify user nonce1 value matches the value we sent
+                serv_nonce2 = common.aes_decrypt(encrypted_serv_nonce2, shared_key, iv4)
+
+                if nonce2 == serv_nonce2:
+                    print "YES!"
+                    print "HOORAY"
 
         except socket.timeout as e:
             print "Server is not responding"
