@@ -47,9 +47,6 @@ def public_key_decrypt(encrypted_keys, ciphertext, priv_key):
     aes_key  = msg_key[:32]
     iv       = msg_key[32:]
 
-    print str(aes_key)
-    print str(iv)
-
     # Decrypt plaintext using AES
     cipher    = AES.new(aes_key, AES.MODE_CBC, iv)
     plaintext = unpad(cipher.decrypt(ciphertext))
@@ -93,4 +90,14 @@ def sign(msg, priv_key):
     signer = PKCS1_v1_5.new(priv_key)
     signature = base64.b64encode( signer.sign(msg) )
     return signature
+
+# Base 64 decode all items in an array
+def decode_msg(msg):
+    return map(base64.b64decode, msg)
+
+# Increment the given key by 1
+def increment_key(key, num=1):
+    int_representation = int(key.encode('hex'), 16)
+    int_representation += num
+    return int_representation
 
