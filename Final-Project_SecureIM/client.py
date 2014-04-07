@@ -43,21 +43,19 @@ class Client():
         # SOCK_DGRAM is the socket type to use for UDP sockets
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 
-        self.login_to_server()
-
-    def login_to_server(self):
+        # Prompt for login information
         sys.stdout.write('Please enter username: ')
         username = sys.stdin.readline().rstrip('\n')
         password = SHA256.new(getpass.getpass()).digest()
-        print "pass: " + password
 
+        # Initiate LOGIN protocol
+        self.login_to_server(username, password)
+
+    def login_to_server(self, username, password):
         try:
             self.sock.sendto("LOGIN", (HOST, PORT))
             received = self.sock.recv(1024)
-            self.print_message("HEYHEY: " + received)
             dos_cookie = received
-
-            print "===================="
 
             iv2 = Random.new().read( 16 )
             encoded_iv2 = base64.b64encode(iv2)
@@ -65,10 +63,7 @@ class Client():
             # compute diffie hellman value and encrypt with password hash
             dh = diffie_hellman.DiffieHellman()
             dh_key = base64.b64encode(str(dh.genPublicKey()))
-
-            plaintext  = pad(str(dh_key))
-            cipher     = AES.new(password, AES.MODE_CBC, iv2)
-            encoded_dh = base64.b64encode(cipher.encrypt(plaintext))
+            encoded_dh = common.aes_encrypt(str(dh_key), password, iv2)
 
             # Sign the message
             signature_msg = SHA256.new(str(username) + str(iv2))
@@ -86,21 +81,20 @@ class Client():
             if len(data) != 2 : return None
 
             msg = common.public_key_decrypt(data[0], data[1], priv_key)
-            iv4       = base64.b64decode( msg[0] )
+            iv2       = base64.b64decode( msg[0] )
             signature = base64.b64decode( msg[1] )
             encrypted_server_dh_value = base64.b64decode( msg[2] )
-            n3 = base64.b64decode( msg[3] )
+            nonce1 = base64.b64decode( msg[3] )
 
             # Verify the signature
-            h = SHA256.new(str(iv4))
+            h = SHA256.new(str(iv2))
 
             verifier = PKCS1_v1_5.new(server_pub_key)
             if verifier.verify(h, str(signature)):
                 print "Signature Verified!"
 
                 # Decrypt using AES
-                cipher        = AES.new(password, AES.MODE_CBC, iv4)
-                server_dh_val = long(base64.b64decode(unpad(cipher.decrypt( encrypted_server_dh_value ))))
+                server_dh_val = long(common.aes_decrypt(encrypted_server_dh_value, password, iv2))
 
                 print 'server DH VAL'
                 print server_dh_val

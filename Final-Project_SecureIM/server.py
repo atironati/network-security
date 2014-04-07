@@ -127,8 +127,7 @@ class UDPHandler(SocketServer.BaseRequestHandler):
             pass_hash = base64.b64decode( self.get_password_hash(uname) )
 
             # Decrypt using AES
-            cipher        = AES.new(pass_hash, AES.MODE_CBC, iv1)
-            diff_hell_val = long(base64.b64decode(unpad(cipher.decrypt( encrypted_diff_hell_val ))))
+            diff_hell_val = common.aes_decrypt(encrypted_diff_hell_val, pass_hash, iv1)
 
             dh = diffie_hellman.DiffieHellman()
             session_key = Random.new().read( 32 )
@@ -139,17 +138,14 @@ class UDPHandler(SocketServer.BaseRequestHandler):
 
             # compute our diffie hellman value and encrypt with password hash
             serv_dh_key = base64.b64encode(str(dh.genPublicKey()))
-
-            plaintext  = pad(str(serv_dh_key))
-            cipher     = AES.new(pass_hash, AES.MODE_CBC, iv4)
-            encoded_serv_dh = base64.b64encode(cipher.encrypt(plaintext))
+            encoded_serv_dh = long(common.aes_encrypt(str(serv_dh_key), pass_hash, iv4))
 
             # Sign the message
             signature_msg = SHA256.new(str(iv4))
             signer = PKCS1_v1_5.new(server_priv_key)
             signature = base64.b64encode( signer.sign(signature_msg) )
 
-            # Encrypt plaintext using AES symmetric encryption
+            # Encrypt with public key of user
             encrypt_msg = "%s,%s,%s,%s" % (encoded_iv4, signature, encoded_serv_dh, encoded_n3)
             encrypted_server_keys, ciphertext = common.public_key_encrypt(encrypt_msg, user_pub_key)
 
