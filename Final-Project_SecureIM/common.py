@@ -57,7 +57,6 @@ def public_key_decrypt(encrypted_keys, ciphertext, priv_key):
     msg = plaintext.split(',')
     return msg
 
-
 # Encrypt using AES
 def aes_encrypt(msg, key, iv):
     plaintext   = pad(msg)
@@ -72,6 +71,22 @@ def aes_decrypt(msg, key, iv):
     decrypted_val = base64.b64decode(unpad(cipher.decrypt( msg )))
 
     return decrypted_val
+
+# Encrypt a message using symmetric crypto
+def shared_key_encrypt(msg, shared_key):
+    iv    = Random.new().read( 16 )
+    plaintext  = pad(msg)
+    cipher     = AES.new(shared_key, AES.MODE_CBC, iv)
+    ciphertext = base64.b64encode(iv + cipher.encrypt(plaintext))
+    return ciphertext
+
+# Decrypt a message using symmetric crypto
+def shared_key_decrypt(msg, shared_key):
+    ciphertext = base64.b64decode(msg)
+    iv         = ciphertext[:16]
+    cipher     = AES.new(shared_key, AES.MODE_CBC, iv)
+    plaintext  = unpad(cipher.decrypt(ciphertext))
+    return plaintext
 
 # Sign a message with a private key
 def sign(msg, priv_key):

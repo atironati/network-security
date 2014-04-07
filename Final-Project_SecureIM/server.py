@@ -54,7 +54,7 @@ class UDPHandler(SocketServer.BaseRequestHandler):
 
     def __init__(self, a, b, c):
         self.protocols = {"LOGIN" : self.login_protocol,
-                          "LIST"  : self.verify_dos_cookie}
+                          "LIST"  : self.list_protocol}
         SocketServer.BaseRequestHandler.__init__(self,a,b,c)
 
     # Handle an incoming request
@@ -237,6 +237,40 @@ class UDPHandler(SocketServer.BaseRequestHandler):
             outgoing_msg = "INCOMING:<From %s:%s> %s\n" % (client_ip, client_port, msg)
             self.socket.sendto(outgoing_msg, addr)
 
+    # Lists all connected clients to user
+    def list_protocol(self, data):
+        if len(data) != 1 : return
+
+        # Parse uname and use it to find the shared key
+        uname = data[0].rstrip('\n')
+        shared_key = connected_clients[uname]['shared_key']
+
+        # Create a nonce, encrypt it with the shared key, send it to the client
+        nonce = Random.new().read( 32 )
+        encrypted_nonce = common.shared_key_encrypt(nonce, shared_key)
+        self.socket.sendto(encrypted_nonce, self.client_address)
+
+        # Receive the nonce back from the client
+        received = self.socket.recv(1024)
+        data = received.strip().split(',',1)
+
+        # Return if the nonce doesn't match
+        if nonce != data[0] : return
+        msg = data[1]
+
+        # Decrypt the client's nonce
+        nonce2 = common.shared_key_decrypt(msg, shared_key + 1)
+
+        # Build the list of connected clients
+        client_list = ""
+        for key, value in connected_clients.iteritems():
+            client_list += key + "\n"
+
+        # Encrypt the list and send it to the client (along with the decrypted nonce)
+        encrypted_client_list = common.shared_key_encrypt(client_list, shared_key)
+        final_msg = nonce2 + ',' + encrypted_client_list
+        self.socket.sendto(encrypted_client_list, self.client_address)
+        
 if __name__ == "__main__":
     try:
         server = SocketServer.UDPServer((HOST, PORT), UDPHandler)
