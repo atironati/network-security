@@ -101,3 +101,10 @@ def increment_key(key, num=1):
     int_representation += num
     return int_representation
 
+# A helper for sending and receiving data
+def send_and_receive(msg, address, socket, response_size, response_len):
+    socket.sendto(msg, address)
+    received = socket.recv(response_size)
+    data = received.strip().split(',',response_len)
+    return data
+

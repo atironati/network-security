@@ -24,8 +24,8 @@ unpad = lambda s : s[0:-ord(s[-1])]
 connected_clients      = collections.defaultdict(lambda: collections.defaultdict(str))
 authenticating_clients = collections.defaultdict(lambda: collections.defaultdict(str))
 
-server_pub_key  = RSA.importKey(open('server_pub_key.txt', 'r').read().rstrip('\n'))
-server_priv_key = RSA.importKey(open('server_priv_key.txt', 'r').read().rstrip('\n'))
+server_pub_key  = RSA.importKey(open('keys/server_pub_key.txt', 'r').read().rstrip('\n'))
+server_priv_key = RSA.importKey(open('keys/server_priv_key.txt', 'r').read().rstrip('\n'))
 
 server_secret = Random.new().read( 32 )
 iv            = Random.new().read( 16 )
@@ -33,8 +33,11 @@ iv            = Random.new().read( 16 )
 conn = sqlite3.connect('server_db.db')
 c = conn.cursor()
 
-# c.execute("INSERT INTO users (ip, password_hash, pub_key, priv_key,name) VALUES ('129.10.9.112','alex','" + pub_key.exportKey() + "','" + priv_key.exportKey() + "','alex')")
-conn.commit()
+#pub_key  = RSA.importKey(open('keys/mark_pub.txt', 'r').read())
+#priv_key = RSA.importKey(open('keys/mark_priv.txt', 'r').read())
+#c.execute("INSERT INTO users (ip, password_hash, pub_key, priv_key,name) VALUES ('129.10.9.112','mark','" + pub_key.exportKey() + "','" + priv_key.exportKey() + "','mark')")
+#c.execute("UPDATE users set pub_key='" + pub_key.exportKey() + "', priv_key='" + priv_key.exportKey() + "' where name='mark')")
+#conn.commit()
 
 HOST = "localhost"
 if len(sys.argv) > 1:
@@ -157,8 +160,7 @@ class UDPHandler(SocketServer.BaseRequestHandler):
 
             # Send message
             send_msg = encrypted_server_keys + "," + ciphertext
-            self.socket.sendto(send_msg, self.client_address)
-            data = self.socket.recv(1024).split(',',2)
+            data = common.send_and_receive(send_msg, self.client_address, self.socket, 1024, 2)
             if len(data) != 2 : return
 
             rec_msg               = common.public_key_decrypt(data[0], data[1], server_priv_key)
@@ -251,11 +253,8 @@ class UDPHandler(SocketServer.BaseRequestHandler):
         nonce1 = Random.new().read( 32 )
         encoded_nonce1 = base64.b64encode(nonce1)
         encrypted_nonce1 = common.aes_encrypt(encoded_nonce1, shared_key, shared_iv)
-        self.socket.sendto(encrypted_nonce1, self.client_address)
 
-        # Receive the nonce back from the client
-        received = self.socket.recv(1024)
-        data = received.strip().split(',',1)
+        data = common.send_and_receive(encrypted_nonce1, self.client_address, self.socket, 1024, 2)
 
         # Return if the nonce doesn't match
         user_nonce1 = base64.b64decode( data[0] )

@@ -18,9 +18,7 @@ from Crypto.Signature import PKCS1_v1_5
 from Crypto.Cipher import PKCS1_OAEP
 from Crypto import Random # Much stronger than standard python random module
 
-server_pub_key = RSA.importKey(open('server_pub_key.txt', 'r').read().rstrip('\n'))
-pub_key        = RSA.importKey(open('alice_pub.txt', 'r').read().rstrip('\n'))
-priv_key       = RSA.importKey(open('alice_priv.txt', 'r').read().rstrip('\n'))
+server_pub_key = RSA.importKey(open('keys/server_pub_key.txt', 'r').read().rstrip('\n'))
 
 BS    = 16
 pad   = lambda s : s + (BS - len(s) % BS) * chr(BS - len(s) % BS)
@@ -39,6 +37,8 @@ class Client():
     username       = None
     shared_key     = None
     shared_iv      = None
+    pub_key        = None
+    priv_key       = None
 
     def __init__(self):
         # Set server address
@@ -54,6 +54,10 @@ class Client():
         sys.stdout.write('Please enter username: ')
         self.username = sys.stdin.readline().rstrip('\n')
         password      = SHA256.new(getpass.getpass()).digest()
+
+        # Import user keys
+        self.pub_key  = RSA.importKey(open('keys/' + self.username + '_pub.txt', 'r').read().rstrip('\n'))
+        self.priv_key = RSA.importKey(open('keys/' + self.username + '_priv.txt', 'r').read().rstrip('\n'))
 
         # Initiate LOGIN protocol
         self.login_to_server(password)
@@ -72,7 +76,7 @@ class Client():
 
             # Sign the message
             signature_msg = SHA256.new(str(self.username) + str(iv1))
-            signature     = common.sign(signature_msg, priv_key)
+            signature     = common.sign(signature_msg, self.priv_key)
 
             # Encrypt plaintext using AES symmetric encryption
             encrypt_msg = "%s,%s,%s,%s" % (self.username, encoded_iv1, signature, encoded_dh)
@@ -80,11 +84,10 @@ class Client():
 
             send_msg = "LOGIN," + dos_cookie + "," + encrypted_keys + "," + ciphertext
             self.sock.settimeout(3)
-            self.sock.sendto(send_msg, self.server_address)
-            data = self.sock.recv(8192).split(',', 2)
+            data = common.send_and_receive(send_msg, self.server_address, self.sock, 8192, 2)
             if len(data) != 2 : return None
 
-            rec_msg = common.public_key_decrypt(data[0], data[1], priv_key)
+            rec_msg = common.public_key_decrypt(data[0], data[1], self.priv_key)
             decoded_msg = common.decode_msg(rec_msg)
             iv2                   = decoded_msg[0]
             signature             = decoded_msg[1]
@@ -117,11 +120,10 @@ class Client():
 
                 # Send message
                 send_msg = encrypted_keys + ',' + ciphertext
-                self.sock.sendto(send_msg, self.server_address)
-                data = self.sock.recv(4096).split(',', 2)
+                data = common.send_and_receive(send_msg, self.server_address, self.sock, 4096, 2)
                 if len(data) != 2 : return None
 
-                rec_msg               = common.public_key_decrypt(data[0], data[1], priv_key)
+                rec_msg               = common.public_key_decrypt(data[0], data[1], self.priv_key)
                 decoded_msg           = common.decode_msg(rec_msg)
                 iv4                   = decoded_msg[0]
                 encrypted_serv_nonce2 = decoded_msg[1]
@@ -184,11 +186,8 @@ class Client():
         encrypted_nonce2 = common.aes_encrypt(encoded_nonce2, incr_shared_key, self.shared_iv)
 
         # Send the decrypted nonce and encrypted second nonce to the server
-        self.sock.sendto(encoded_decrypted_nonce + "," + encrypted_nonce2, self.server_address)
-
-        # Receive the client list from the server
-        received = self.sock.recv(8192)
-        data = received.split(',', 1)
+        send_msg = encoded_decrypted_nonce + "," + encrypted_nonce2
+        data = common.send_and_receive(send_msg, self.server_address, self.sock, 8192, 2)
 
         # Check the nonce
         serv_nonce2 = base64.b64decode( data[0] )
