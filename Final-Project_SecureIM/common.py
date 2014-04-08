@@ -47,15 +47,27 @@ def public_key_decrypt(encrypted_keys, ciphertext, priv_key):
     aes_key  = msg_key[:32]
     iv       = msg_key[32:]
 
-    print str(aes_key)
-    print str(iv)
-
     # Decrypt plaintext using AES
     cipher    = AES.new(aes_key, AES.MODE_CBC, iv)
     plaintext = unpad(cipher.decrypt(ciphertext))
 
     msg = plaintext.split(',')
     return msg
+
+# Encrypt using AES
+def aes_encrypt(msg, key, iv):
+    plaintext   = pad(msg)
+    cipher      = AES.new(key, AES.MODE_CBC, iv)
+    encoded_msg = base64.b64encode(cipher.encrypt(plaintext))
+
+    return encoded_msg
+
+# Decrypt using AES
+def aes_decrypt(msg, key, iv):
+    cipher        = AES.new(key, AES.MODE_CBC, iv)
+    decrypted_val = base64.b64decode(unpad(cipher.decrypt( msg )))
+
+    return decrypted_val
 
 # Encrypt a message using symmetric crypto
 def shared_key_encrypt(msg, shared_key):
@@ -72,7 +84,27 @@ def shared_key_decrypt(msg, shared_key):
     cipher     = AES.new(shared_key, AES.MODE_CBC, iv)
     plaintext  = unpad(cipher.decrypt(ciphertext))
     return plaintext
-    
-    
 
+# Sign a message with a private key
+def sign(msg, priv_key):
+    signer = PKCS1_v1_5.new(priv_key)
+    signature = base64.b64encode( signer.sign(msg) )
+    return signature
+
+# Base 64 decode all items in an array
+def decode_msg(msg):
+    return map(base64.b64decode, msg)
+
+# Increment the given key by 1
+def increment_key(key, num=1):
+    int_representation = int(key.encode('hex'), 16)
+    int_representation += num
+    return int_representation
+
+# A helper for sending and receiving data
+def send_and_receive(msg, address, socket, response_size, response_len):
+    socket.sendto(msg, address)
+    received = socket.recv(response_size)
+    data = received.strip().split(',',response_len)
+    return data
 
