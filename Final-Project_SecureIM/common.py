@@ -56,9 +56,9 @@ def public_key_decrypt(encrypted_keys, ciphertext, priv_key):
 
 # Encrypt using AES
 def aes_encrypt(msg, key, iv):
-    plaintext   = pad(msg)
+    plaintext   = pad(base64.b64encode(msg))
     cipher      = AES.new(key, AES.MODE_CBC, iv)
-    encoded_msg = base64.b64encode(cipher.encrypt(plaintext))
+    encoded_msg = cipher.encrypt(plaintext)
 
     return encoded_msg
 
@@ -88,8 +88,18 @@ def shared_key_decrypt(msg, shared_key):
 # Sign a message with a private key
 def sign(msg, priv_key):
     signer = PKCS1_v1_5.new(priv_key)
-    signature = base64.b64encode( signer.sign(msg) )
+    signature = signer.sign(msg)
     return signature
+
+# Base 64 encode all items in an array
+def encode_msg(msg):
+    new_msg = ''
+    for idx, item in enumerate(msg):
+        new_msg += base64.b64encode(item)
+        if idx != (len(msg)-1):
+            new_msg += ','
+
+    return new_msg
 
 # Base 64 decode all items in an array
 def decode_msg(msg):

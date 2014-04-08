@@ -31,14 +31,7 @@ else:
     PORT = 9999
 
 class Client():
-    # SOCK_DGRAM is the socket type to use for UDP sockets
-    sock           = None
-    server_address = None
-    username       = None
-    shared_key     = None
-    shared_iv      = None
-    pub_key        = None
-    priv_key       = None
+    sock, server_address, username, shared_key, shared_iv, pub_key, priv_key = [None, None, None, None, None, None, None]
 
     def __init__(self):
         # Set server address
@@ -69,17 +62,16 @@ class Client():
 
             # compute diffie hellman value and encrypt with password hash
             iv1         = Random.new().read( 16 )
-            encoded_iv1 = base64.b64encode(iv1)
             dh          = diffie_hellman.DiffieHellman()
-            dh_key      = base64.b64encode(str(dh.genPublicKey()))
-            encoded_dh  = common.aes_encrypt(str(dh_key), password, iv1)
+            dh_key      = str(dh.genPublicKey())
+            dh_val      = common.aes_encrypt(dh_key, password, iv1)
 
             # Sign the message
             signature_msg = SHA256.new(str(self.username) + str(iv1))
             signature     = common.sign(signature_msg, self.priv_key)
 
             # Encrypt plaintext using AES symmetric encryption
-            encrypt_msg = "%s,%s,%s,%s" % (self.username, encoded_iv1, signature, encoded_dh)
+            encrypt_msg = common.encode_msg([self.username, iv1, signature, dh_val])
             encrypted_keys, ciphertext = common.public_key_encrypt(encrypt_msg, server_pub_key)
 
             send_msg = "LOGIN," + dos_cookie + "," + encrypted_keys + "," + ciphertext
@@ -93,7 +85,6 @@ class Client():
             signature             = decoded_msg[1]
             encrypted_serv_dh_val = decoded_msg[2]
             nonce1                = decoded_msg[3]
-            encoded_nonce1        = base64.b64encode( nonce1 )
 
             # Verify the signature
             h = SHA256.new(str(iv2))
@@ -109,13 +100,11 @@ class Client():
 
                 # Encrypt nonce1 with our shared key
                 nonce2         = Random.new().read( 32 )
-                encoded_nonce2 = base64.b64encode( nonce2 )
                 iv3            = Random.new().read( 16 )
-                encoded_iv3    = base64.b64encode( iv3 )
-                encrypted_n1   = common.aes_encrypt(encoded_nonce1, shared_key, iv3)
+                encrypted_n1   = common.aes_encrypt(nonce1, shared_key, iv3)
 
                 # Encrypt mesage with pub key of the server
-                encrypt_msg = "%s,%s,%s" % (encoded_iv3, encrypted_n1, encoded_nonce2)
+                encrypt_msg = common.encode_msg([iv3, encrypted_n1, nonce2])
                 encrypted_keys, ciphertext = common.public_key_encrypt(encrypt_msg, server_pub_key)
 
                 # Send message
@@ -147,20 +136,6 @@ class Client():
             print "Server is not responding"
             sys.exit()
 
-    def send_message(self, msg):
-        self.send_helper("MESSAGE:", msg)
-
-    # Print incoming messages to the terminal, has options for line breaks
-    def print_message(self, msg, lb_before=False, lb_after=False):
-        print '\n' + msg
-        if "INCOMING:" in msg:
-            if lb_before:
-                print '\n' + msg[9:]
-            elif lb_after:
-                print msg[9:] + '\n'
-            else:
-                print msg[9:]
-
     # Get a list of connected clients from the server
     def get_client_list(self):
         # Send the "LIST" server request
@@ -177,16 +152,15 @@ class Client():
         encrypted_nonce = self.sock.recv(1024)
         decoded_encrypted_nonce = base64.b64decode(encrypted_nonce)
         decrypted_nonce = common.aes_decrypt(decoded_encrypted_nonce, self.shared_key, self.shared_iv)
-        encoded_decrypted_nonce = base64.b64encode(decrypted_nonce)
 
         # Create a new nonce and encrypt with the shared key + 1
         nonce2 = Random.new().read( 32 )
-        encoded_nonce2 = base64.b64encode(nonce2)
         incr_shared_key = SHA256.new(str( common.increment_key(self.shared_key) )).digest()
-        encrypted_nonce2 = common.aes_encrypt(encoded_nonce2, incr_shared_key, self.shared_iv)
+        encrypted_nonce2 = common.aes_encrypt(nonce2, incr_shared_key, self.shared_iv)
 
         # Send the decrypted nonce and encrypted second nonce to the server
-        send_msg = encoded_decrypted_nonce + "," + encrypted_nonce2
+        #send_msg = encoded_decrypted_nonce + "," + encrypted_nonce2
+        send_msg = common.encode_msg([decrypted_nonce, encrypted_nonce2])
         data = common.send_and_receive(send_msg, self.server_address, self.sock, 8192, 2)
 
         # Check the nonce
@@ -194,13 +168,56 @@ class Client():
         if serv_nonce2 != nonce2 : return
         encrypted_unames = base64.b64decode(data[1])
 
-        unames = base64.b64encode( common.aes_decrypt(encrypted_unames, self.shared_key, self.shared_iv) )
+        # Decrypt and print names
+        unames = common.aes_decrypt(encrypted_unames, self.shared_key, self.shared_iv)
+        unames = unames.split(',')
+        for name in unames:
+            print name
 
-        print "FINAL"
-        print str(unames)
+    def send_message(self, user, msg):
+        if authenticated_users[user] is None:
+            self.get_ticket_from_server(user)
 
-        # Print the client list
-        print_message(self, unames)
+        print 'ppoop'
+
+    def get_ticket_from_server(self, user):
+        try:
+            self.sock.sendto("TICKET", self.server_address)
+            dos_cookie = self.sock.recv(1024)
+
+            # compute something
+            iv1         = Random.new().read( 16 )
+
+            # Encrypt plaintext using AES symmetric encryption
+            encrypt_msg = "%s,%s,%s,%s" % (self.username, encoded_iv1, signature, encoded_dh)
+            encrypted_keys, ciphertext = common.public_key_encrypt(encrypt_msg, server_pub_key)
+
+            # Create something
+            nonce2 = Random.new().read( 32 )
+            encoded_msg = base64.b64encode(user)
+            encrypted_nonce2 = common.aes_encrypt(encoded_msg, self.shared_key, self.shared_iv)
+
+
+            send_msg = "TICKET," + dos_cookie + "," + self.username + ',' + ciphertext
+            data = common.send_and_receive(send_msg, self.server_address, self.sock, 8192, 2)
+            if len(data) != 2 : return None
+
+        except socket.timeout as e:
+            print "Server is not responding"
+            sys.exit()
+
+
+    # Print incoming messages to the terminal, has options for line breaks
+    def print_message(self, msg, lb_before=False, lb_after=False):
+        print '\n' + msg
+        if "INCOMING:" in msg:
+            if lb_before:
+                print '\n' + msg[9:]
+            elif lb_after:
+                print msg[9:] + '\n'
+            else:
+                print msg[9:]
+
 
 # User input prompt
 def prompt():
@@ -230,12 +247,17 @@ while(1):
 
             # User entered a message
             else:
-                msg = sys.stdin.readline()
-                if msg.rstrip('\n') == "list":
-                    c.get_client_list()
-                else:
-                    c.send_message(msg)
-                    prompt()
+                msg = sys.stdin.readline().rstrip('\n').split(' ', 2)
+
+                if len(msg) > 0:
+                    if msg[0] == "list":
+                        c.get_client_list()
+
+                    if len(msg) == 3:
+                        if msg[0] == "send":
+                            c.send_message(msg[1],msg[2])
+
+                prompt()
 
     except KeyboardInterrupt as msg:
         print "disconnected"
