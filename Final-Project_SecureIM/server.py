@@ -360,7 +360,7 @@ class UDPHandler(SocketServer.BaseRequestHandler):
         encrypted_keys, ciphertext = common.public_key_encrypt(encrypt_msg, requested_user_pub_key)
         return [encrypted_keys, ciphertext]
 
-    def create_shared_key(self):
+    def create_shared_key(self, data):
         # Create shared key between users
         dh1 = diffie_hellman.DiffieHellman()
         dh2 = diffie_hellman.DiffieHellman()
@@ -453,7 +453,6 @@ class UDPHandler(SocketServer.BaseRequestHandler):
         encrypted_timestamp = common.aes_encrypt(timestamp, shared_key, shared_iv)
         final_msg = common.encode_msg([nonce2, encrypted_timestamp])
         self.socket.sendto(final_msg, self.client_address)
-
 
 if __name__ == "__main__":
     try:
