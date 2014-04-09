@@ -60,7 +60,8 @@ class UDPHandler(SocketServer.BaseRequestHandler):
     def __init__(self, a, b, c):
         self.protocols = {"LOGIN"  : self.login_protocol,
                           "LIST"   : self.list_protocol,
-                          "TICKET" : self.ticket_protocol}
+                          "TICKET" : self.ticket_protocol,
+                          "LOGOUT" : self.logout_protocol}
         SocketServer.BaseRequestHandler.__init__(self,a,b,c)
 
     # Handle an incoming request
@@ -124,8 +125,6 @@ class UDPHandler(SocketServer.BaseRequestHandler):
         iv1              = decoded_msg[1]
         signature        = decoded_msg[2]
         encrypted_dh_val = decoded_msg[3]
-
-        if connected_clients.get(uname) is not None: return
 
         # Lookup public key of the user
         user_pub_key = self.get_user_pub_key(uname)
@@ -299,6 +298,7 @@ class UDPHandler(SocketServer.BaseRequestHandler):
 
         # Parse uname and use it to find the shared key
         uname = data[0]
+        if connected_clients.get(uname) is None : return
         shared_key = connected_clients[uname]['shared_key']
         shared_iv  = connected_clients[uname]['shared_iv']
 
@@ -368,6 +368,60 @@ class UDPHandler(SocketServer.BaseRequestHandler):
         dh1.genKey(dh2.publicKey)
         shared_user_key = dh1.getKey()
         return shared_user_key
+
+    # Logs out user
+    def logout_protocol(self, data):
+        if len(data) != 4 : return
+        decoded_msg  = common.decode_msg(data)
+        uname        = decoded_msg[0]
+        iv           = decoded_msg[1]
+        signature    = decoded_msg[2]
+        encrypted_ts = decoded_msg[3]
+
+        # Get user info
+        if connected_clients.get(uname) is None : return
+        shared_key = connected_clients[uname]['shared_key']
+        shared_iv  = connected_clients[uname]['shared_iv']
+
+        # Verify user signature
+        user_pub_key = self.get_user_pub_key(uname)
+        h = SHA256.new(str(iv))
+        verifier = PKCS1_v1_5.new(user_pub_key)
+
+        if verifier.verify(h, str(signature)):
+            # Decrypt status
+            user_timestamp_str = common.aes_decrypt(encrypted_ts, shared_key, shared_iv)
+
+            user_timestamp = ''
+            try:
+                user_timestamp = datetime.datetime.strptime(user_timestamp_str, fmt)
+            except ValueError:
+                print "timestamp import issue"
+                return
+
+            # Verify timestamp is within acceptable range
+            if common.verify_timestamp(user_timestamp, 5):
+                # Encrypt response with the shared key
+                encrypted_msg = common.aes_encrypt("LOGOUTSUCCESS", shared_key, shared_iv)
+
+                # Create a signature
+                iv2           = Random.new().read( 16 )
+                signature_msg = SHA256.new(str(iv2))
+                signature     = common.sign(signature_msg, server_priv_key)
+
+                # Encode the response (with ticket) and send it to the client
+                final_msg = common.encode_msg([iv2, signature, encrypted_msg])
+                self.socket.sendto(final_msg, self.client_address)
+
+                # Destroy user data
+                connected_clients.pop(uname, None)
+                print "User Logout: " + uname
+            else:
+                print "invalid timestamp"
+        else:
+            print "Invalid Signature"
+
+        return
 
 
 if __name__ == "__main__":

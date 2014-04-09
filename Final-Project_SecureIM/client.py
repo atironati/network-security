@@ -141,6 +141,53 @@ class Client():
             print "Server is not responding"
             sys.exit()
 
+    def logout(self):
+        try:
+            self.sock.sendto("LOGOUT", self.server_address)
+            dos_cookie = self.sock.recv(1024)
+
+            # Compute current timestamp and encrypt
+            timestamp           = datetime.datetime.now().strftime(fmt)
+            encrypted_timestamp = common.aes_encrypt(timestamp, self.shared_key, self.shared_iv)
+
+            # Sign the message
+            iv            = Random.new().read( 16 )
+            signature_msg = SHA256.new(str(iv))
+            signature     = common.sign(signature_msg, self.priv_key)
+
+            # Send logout request
+            send_msg_body = common.encode_msg([self.username, iv, signature, encrypted_timestamp])
+            send_msg      = 'LOGOUT' + ',' + dos_cookie + ',' + send_msg_body
+            data = common.send_and_receive(send_msg, self.server_address, self.sock, 2048, 3)
+            if len(data) != 3 :
+                return None
+            decode_data = common.decode_msg(data)
+
+            iv2              = decode_data[0]
+            serv_signature   = decode_data[1]
+            encrypted_status = decode_data[2]
+
+            # Verify server signature
+            h = SHA256.new(str(iv2))
+            verifier = PKCS1_v1_5.new(server_pub_key)
+
+            if verifier.verify(h, str(serv_signature)):
+                # Decrypt status
+                status = common.aes_decrypt(encrypted_status, self.shared_key, self.shared_iv)
+
+                if status == "LOGOUTSUCCESS":
+                    print "Logout successful!"
+                    sys.exit()
+                else:
+                    print "Logout failed"
+            else:
+                print "Logout failed - invalid signature"
+
+            return
+        except socket.timeout as e:
+            print "Server is not responding"
+            sys.exit()
+
     # Get a list of connected clients from the server
     def get_client_list(self):
         # Send the "LIST" server request
@@ -425,6 +472,9 @@ while(1):
                 if len(msg) > 0:
                     if msg[0] == "list":
                         c.get_client_list()
+
+                    if msg[0] == "logout":
+                        c.logout()
 
                     if len(msg) == 3:
                         if msg[0] == "send":
