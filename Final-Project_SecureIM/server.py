@@ -35,11 +35,11 @@ iv            = Random.new().read( 16 )
 conn = sqlite3.connect('server_db.db')
 c = conn.cursor()
 
-#pub_key  = RSA.importKey(open('keys/mark_pub.txt', 'r').read())
-#priv_key = RSA.importKey(open('keys/mark_priv.txt', 'r').read())
-#c.execute("INSERT INTO users (ip, password_hash, pub_key, priv_key,name) VALUES ('129.10.9.112','mark','" + pub_key.exportKey() + "','" + priv_key.exportKey() + "','mark')")
+#pub_key  = RSA.importKey(open('keys/bob_pub.txt', 'r').read())
+#priv_key = RSA.importKey(open('keys/bob_priv.txt', 'r').read())
+#c.execute("INSERT INTO users (ip, password_hash, pub_key, priv_key,name) VALUES ('129.10.9.112','bob','" + pub_key.exportKey() + "','" + priv_key.exportKey() + "','bob')")
 #c.execute("UPDATE users set pub_key='" + pub_key.exportKey() + "', priv_key='" + priv_key.exportKey() + "' where name='mark')")
-#conn.commit()
+conn.commit()
 
 HOST = "localhost"
 if len(sys.argv) > 1:
