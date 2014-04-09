@@ -6,6 +6,7 @@ import sys
 import sqlite3
 import collections
 import common
+import datetime
 
 import base64
 
@@ -20,6 +21,7 @@ from Crypto import Random # Much stronger than standard python random module
 BS    = 16
 pad   = lambda s : s + (BS - len(s) % BS) * chr(BS - len(s) % BS)
 unpad = lambda s : s[0:-ord(s[-1])]
+fmt = '%Y-%m-%d %H:%M:%S'
 
 connected_clients      = collections.defaultdict(lambda: collections.defaultdict(str))
 authenticating_clients = collections.defaultdict(lambda: collections.defaultdict(str))
@@ -56,8 +58,9 @@ class UDPHandler(SocketServer.BaseRequestHandler):
     socket             = None
 
     def __init__(self, a, b, c):
-        self.protocols = {"LOGIN" : self.login_protocol,
-                          "LIST"  : self.list_protocol}
+        self.protocols = {"LOGIN"  : self.login_protocol,
+                          "LIST"   : self.list_protocol,
+                          "TICKET" : self.ticket_protocol}
         SocketServer.BaseRequestHandler.__init__(self,a,b,c)
 
     # Handle an incoming request
@@ -85,6 +88,7 @@ class UDPHandler(SocketServer.BaseRequestHandler):
                     print "Protocol not found"
 
     def send_dos_cookie(self):
+        print str(self.client_address)
         client_ip = str(self.client_address[0])
 
         plaintext  = pad(client_ip + "," + str(server_secret))
@@ -116,10 +120,12 @@ class UDPHandler(SocketServer.BaseRequestHandler):
         # Decrypt message with our private key and break out message
         msg              = common.public_key_decrypt(data[0], data[1], server_priv_key)
         decoded_msg      = common.decode_msg(msg)
-        uname            = msg[0]
+        uname            = decoded_msg[0]
         iv1              = decoded_msg[1]
         signature        = decoded_msg[2]
         encrypted_dh_val = decoded_msg[3]
+
+        if connected_clients.get(uname) is not None: return
 
         # Lookup public key of the user
         user_pub_key = self.get_user_pub_key(uname)
@@ -137,14 +143,12 @@ class UDPHandler(SocketServer.BaseRequestHandler):
 
             # Create random values
             nonce1         = Random.new().read( 32 )
-            encoded_nonce1 = base64.b64encode(nonce1)
             iv2            = Random.new().read( 16 )
-            encoded_iv2    = base64.b64encode(iv2)
 
             # Compute our diffie hellman value and encrypt with password hash
             dh = diffie_hellman.DiffieHellman()
-            serv_dh_key = base64.b64encode(str(dh.genPublicKey()))
-            encoded_serv_dh = common.aes_encrypt(str(serv_dh_key), pass_hash, iv2)
+            serv_dh_key = str(dh.genPublicKey())
+            serv_dh = common.aes_encrypt(serv_dh_key, pass_hash, iv2)
 
             # Establish shared key
             dh.genKey(diff_hell_val)
@@ -155,7 +159,7 @@ class UDPHandler(SocketServer.BaseRequestHandler):
             signature     = common.sign(signature_msg, server_priv_key )
 
             # Encrypt with public key of user
-            encrypt_msg = "%s,%s,%s,%s" % (encoded_iv2, signature, encoded_serv_dh, encoded_nonce1)
+            encrypt_msg = common.encode_msg([iv2, signature, serv_dh, nonce1])
             encrypted_server_keys, ciphertext = common.public_key_encrypt(encrypt_msg, user_pub_key)
 
             # Send message
@@ -168,7 +172,6 @@ class UDPHandler(SocketServer.BaseRequestHandler):
             iv3                   = decoded_msg[0]
             encrypted_user_nonce1 = decoded_msg[1]
             nonce2                = decoded_msg[2]
-            encoded_nonce2        = base64.b64encode( nonce2 )
 
             # Verify user encrypted nonce1 with the shared key
             user_nonce1 = common.aes_decrypt(encrypted_user_nonce1, shared_key, iv3)
@@ -178,10 +181,9 @@ class UDPHandler(SocketServer.BaseRequestHandler):
 
                 # Send last message so client can verify our identity/shared key
                 iv4          = Random.new().read( 16 )
-                encoded_iv4  = base64.b64encode( iv4 )
-                encrypted_n2 = common.aes_encrypt(encoded_nonce2, shared_key, iv4)
+                encrypted_n2 = common.aes_encrypt(nonce2, shared_key, iv4)
 
-                encrypt_msg = "%s,%s" % (encoded_iv4, encrypted_n2)
+                encrypt_msg = common.encode_msg([iv4, encrypted_n2])
                 encrypted_keys, ciphertext = common.public_key_encrypt(encrypt_msg, user_pub_key)
 
                 msg = encrypted_keys + ',' + ciphertext
@@ -191,6 +193,7 @@ class UDPHandler(SocketServer.BaseRequestHandler):
                 connected_clients[uname]['shared_key'] = shared_key
                 connected_clients[uname]['shared_iv']  = iv4
                 connected_clients[uname]['ip']         = self.client_address[0]
+                connected_clients[uname]['port']       = self.client_address[1]
             else:
                 print "Login Failure for user: " + uname
         else:
@@ -200,6 +203,21 @@ class UDPHandler(SocketServer.BaseRequestHandler):
     def get_user_pub_key(self, uname):
         try:
             cmd = "SELECT pub_key FROM users WHERE name=?"
+            c.execute( cmd, (uname,) )
+
+            data = c.fetchone()
+            key  = ''
+            if data is not None:
+                key = RSA.importKey(data[0])
+
+            return key
+
+        except sqlite3.Error, e:
+            print "Error %s" % e.args[0]
+
+    def get_user_priv_key(self, uname):
+        try:
+            cmd = "SELECT priv_key FROM users WHERE name=?"
             c.execute( cmd, (uname,) )
 
             data = c.fetchone()
@@ -251,10 +269,10 @@ class UDPHandler(SocketServer.BaseRequestHandler):
 
         # Create a nonce, encrypt it with the shared key, send it to the client
         nonce1 = Random.new().read( 32 )
-        encoded_nonce1 = base64.b64encode(nonce1)
-        encrypted_nonce1 = common.aes_encrypt(encoded_nonce1, shared_key, shared_iv)
+        encrypted_nonce1 = common.aes_encrypt(nonce1, shared_key, shared_iv)
 
-        data = common.send_and_receive(encrypted_nonce1, self.client_address, self.socket, 1024, 2)
+        encrypt_msg = common.encode_msg([encrypted_nonce1])
+        data = common.send_and_receive(encrypt_msg, self.client_address, self.socket, 1024, 2)
 
         # Return if the nonce doesn't match
         user_nonce1 = base64.b64decode( data[0] )
@@ -264,17 +282,93 @@ class UDPHandler(SocketServer.BaseRequestHandler):
         # Decrypt the client's nonce
         incr_shared_key = SHA256.new(str( common.increment_key(shared_key) )).digest()
         nonce2 = common.aes_decrypt(encrypted_n2, incr_shared_key, shared_iv)
-        encoded_nonce2 = base64.b64encode( nonce2 )
 
         # Build the list of connected clients
-        client_list = ""
+        client_list = ''
         for key, value in connected_clients.iteritems():
-            client_list += key + "\n"
+            client_list += key + ','
 
         # Encrypt the list and send it to the client (along with the decrypted nonce)
         encrypted_client_list = common.aes_encrypt(client_list, shared_key, shared_iv)
-        final_msg = encoded_nonce2 + ',' + encrypted_client_list
+        final_msg = common.encode_msg([nonce2, encrypted_client_list])
         self.socket.sendto(final_msg, self.client_address)
+
+    # Issues a ticket to talk to a user
+    def ticket_protocol(self, data):
+        if len(data) != 2 : return
+
+        # Parse uname and use it to find the shared key
+        uname = data[0]
+        shared_key = connected_clients[uname]['shared_key']
+        shared_iv  = connected_clients[uname]['shared_iv']
+
+        # Decrypt the requested user and timestamp
+        msg = common.aes_decrypt(base64.b64decode(data[1]), shared_key, shared_iv).split(",",2)
+        if len(msg) != 2 : return
+
+        requested_user      = msg[0]
+        requested_user_ip   = connected_clients[requested_user]['ip']
+        requested_user_port = str(connected_clients[requested_user]['port'])
+        user_timestamp_str  = ''
+        user_timestamp      = ''
+        try:
+            user_timestamp_str = msg[1]
+            user_timestamp     = datetime.datetime.strptime(msg[1], fmt)
+        except ValueError:
+            print "timestamp import issue"
+            return
+
+        # Verify timestamp is within acceptable range
+        if common.verify_timestamp(user_timestamp, 5):
+            # Lookup public key requested_user and create shared key
+            requested_user_pub_key_str = self.get_user_pub_key(requested_user).exportKey()
+            shared_user_key = self.create_shared_key()
+
+            # Create ticket to requested_user
+            encrypted_keys, ciphertext = self.create_ticket(requested_user, uname, shared_user_key)
+
+            # Encrypt response with the shared key + 1
+            encrypt_msg = user_timestamp_str + ',' + requested_user + ',' + shared_user_key + ',' + encrypted_keys + ',' + \
+                          ciphertext + ',' + requested_user_pub_key_str + ',' + requested_user_ip + ',' + requested_user_port
+            incr_shared_key = SHA256.new(str( common.increment_key(shared_key) )).digest()
+            encrypted_msg   = common.aes_encrypt(encrypt_msg, incr_shared_key, shared_iv)
+
+            # Encode the response (with ticket) and send it to the client
+            final_msg = common.encode_msg([encrypted_msg])
+            self.socket.sendto(final_msg, self.client_address)
+
+        else:
+            print "Timestamp not current enough"
+            return
+
+    def create_ticket(self, requested_user, requesting_user, shared_user_key):
+        requesting_user_pub_key_str = self.get_user_pub_key(requesting_user).exportKey()
+        requested_user_pub_key      = self.get_user_pub_key(requested_user)
+        requested_user_pub_key_str  = requested_user_pub_key.exportKey()
+        #requested_user_priv_key    = self.get_user_priv_key(requested_user).exportKey()
+        now                         = datetime.datetime.now()
+        expiration_datetime         = (now + datetime.timedelta(days=1)).strftime(fmt)
+
+        # Create a signature
+        iv            = Random.new().read( 16 )
+        signature_msg = SHA256.new(str(iv))
+        signature     = common.sign(signature_msg, server_priv_key)
+
+        # Encrypt with public key of requested user
+        encrypt_msg = common.encode_msg([iv, signature, shared_user_key, requesting_user, requesting_user_pub_key_str, expiration_datetime])
+        encrypted_keys, ciphertext = common.public_key_encrypt(encrypt_msg, requested_user_pub_key)
+        return [encrypted_keys, ciphertext]
+
+    def create_shared_key(self):
+        # Create shared key between users
+        dh1 = diffie_hellman.DiffieHellman()
+        dh2 = diffie_hellman.DiffieHellman()
+        dh1.genPublicKey()
+        dh2.genPublicKey()
+        dh1.genKey(dh2.publicKey)
+        shared_user_key = dh1.getKey()
+        return shared_user_key
+
 
 if __name__ == "__main__":
     try:
