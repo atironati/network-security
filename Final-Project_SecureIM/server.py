@@ -360,7 +360,7 @@ class UDPHandler(SocketServer.BaseRequestHandler):
         encrypted_keys, ciphertext = common.public_key_encrypt(encrypt_msg, requested_user_pub_key)
         return [encrypted_keys, ciphertext]
 
-    def create_shared_key(self, data):
+    def create_shared_key(self):
         # Create shared key between users
         dh1 = diffie_hellman.DiffieHellman()
         dh2 = diffie_hellman.DiffieHellman()
