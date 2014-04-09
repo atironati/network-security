@@ -1,9 +1,14 @@
 
-BS    = 16
-pad   = lambda s : s + (BS - len(s) % BS) * chr(BS - len(s) % BS)
-unpad = lambda s : s[0:-ord(s[-1])]
-
+import socket
+import sys
+import select
+import termios
+import tty
+import diffie_hellman
+import getpass
 import base64
+import collections
+import datetime
 
 # crypto libraries
 from Crypto.Hash import SHA256
@@ -12,6 +17,11 @@ from Crypto.PublicKey import RSA
 from Crypto.Signature import PKCS1_v1_5
 from Crypto.Cipher import PKCS1_OAEP
 from Crypto import Random # Much stronger than standard python random module
+
+BS    = 16
+pad   = lambda s : s + (BS - len(s) % BS) * chr(BS - len(s) % BS)
+unpad = lambda s : s[0:-ord(s[-1])]
+fmt = '%Y-%m-%d %H:%M:%S'
 
 # Encrypt a message using public-key crypto
 def public_key_encrypt(msg, pub_key):
@@ -56,11 +66,11 @@ def public_key_decrypt(encrypted_keys, ciphertext, priv_key):
 
 # Encrypt using AES
 def aes_encrypt(msg, key, iv):
-    plaintext   = pad(base64.b64encode(msg))
-    cipher      = AES.new(key, AES.MODE_CBC, iv)
-    encoded_msg = cipher.encrypt(plaintext)
+    plaintext = pad(base64.b64encode(msg))
+    cipher    = AES.new(key, AES.MODE_CBC, iv)
+    msg       = cipher.encrypt(plaintext)
 
-    return encoded_msg
+    return msg
 
 # Decrypt using AES
 def aes_decrypt(msg, key, iv):
@@ -117,4 +127,15 @@ def send_and_receive(msg, address, socket, response_size, response_len):
     received = socket.recv(response_size)
     data = received.strip().split(',',response_len)
     return data
+
+# Verify a given timestamp falls within a certain minute range
+def verify_timestamp(t, mins):
+    t_plus  = t + datetime.timedelta(minutes = mins)
+    t_minus = t + datetime.timedelta(minutes = -mins)
+    return (t < t_plus and t > t_minus)
+
+# Verify a given timestamp is not in the past
+def is_timestamp_current(t):
+    now = datetime.datetime.now()
+    return (t > now)
 

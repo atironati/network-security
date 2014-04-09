@@ -6,6 +6,7 @@ import sys
 import sqlite3
 import collections
 import common
+import datetime
 
 import base64
 
@@ -20,6 +21,7 @@ from Crypto import Random # Much stronger than standard python random module
 BS    = 16
 pad   = lambda s : s + (BS - len(s) % BS) * chr(BS - len(s) % BS)
 unpad = lambda s : s[0:-ord(s[-1])]
+fmt = '%Y-%m-%d %H:%M:%S'
 
 connected_clients      = collections.defaultdict(lambda: collections.defaultdict(str))
 authenticating_clients = collections.defaultdict(lambda: collections.defaultdict(str))
@@ -56,8 +58,9 @@ class UDPHandler(SocketServer.BaseRequestHandler):
     socket             = None
 
     def __init__(self, a, b, c):
-        self.protocols = {"LOGIN" : self.login_protocol,
-                          "LIST"  : self.list_protocol}
+        self.protocols = {"LOGIN"  : self.login_protocol,
+                          "LIST"   : self.list_protocol,
+                          "TICKET" : self.ticket_protocol}
         SocketServer.BaseRequestHandler.__init__(self,a,b,c)
 
     # Handle an incoming request
@@ -190,6 +193,7 @@ class UDPHandler(SocketServer.BaseRequestHandler):
                 connected_clients[uname]['shared_key'] = shared_key
                 connected_clients[uname]['shared_iv']  = iv4
                 connected_clients[uname]['ip']         = self.client_address[0]
+                connected_clients[uname]['port']       = self.client_address[1]
             else:
                 print "Login Failure for user: " + uname
         else:
@@ -199,6 +203,21 @@ class UDPHandler(SocketServer.BaseRequestHandler):
     def get_user_pub_key(self, uname):
         try:
             cmd = "SELECT pub_key FROM users WHERE name=?"
+            c.execute( cmd, (uname,) )
+
+            data = c.fetchone()
+            key  = ''
+            if data is not None:
+                key = RSA.importKey(data[0])
+
+            return key
+
+        except sqlite3.Error, e:
+            print "Error %s" % e.args[0]
+
+    def get_user_priv_key(self, uname):
+        try:
+            cmd = "SELECT priv_key FROM users WHERE name=?"
             c.execute( cmd, (uname,) )
 
             data = c.fetchone()
@@ -273,6 +292,83 @@ class UDPHandler(SocketServer.BaseRequestHandler):
         encrypted_client_list = common.aes_encrypt(client_list, shared_key, shared_iv)
         final_msg = common.encode_msg([nonce2, encrypted_client_list])
         self.socket.sendto(final_msg, self.client_address)
+
+    # Issues a ticket to talk to a user
+    def ticket_protocol(self, data):
+        if len(data) != 2 : return
+
+        # Parse uname and use it to find the shared key
+        uname = data[0]
+        shared_key = connected_clients[uname]['shared_key']
+        shared_iv  = connected_clients[uname]['shared_iv']
+
+        # Decrypt the requested user and timestamp
+        msg = common.aes_decrypt(base64.b64decode(data[1]), shared_key, shared_iv).split(",",2)
+        if len(msg) != 2 : return
+
+        requested_user      = msg[0]
+        requested_user_ip   = connected_clients[requested_user]['ip']
+        requested_user_port = str(connected_clients[requested_user]['port'])
+        user_timestamp_str  = ''
+        user_timestamp      = ''
+        try:
+            user_timestamp_str = msg[1]
+            user_timestamp     = datetime.datetime.strptime(msg[1], fmt)
+        except ValueError:
+            print "timestamp import issue"
+            return
+
+        # Verify timestamp is within acceptable range
+        if common.verify_timestamp(user_timestamp, 5):
+            # Lookup public key requested_user and create shared key
+            requested_user_pub_key_str = self.get_user_pub_key(requested_user).exportKey()
+            shared_user_key = self.create_shared_key()
+
+            # Create ticket to requested_user
+            encrypted_keys, ciphertext = self.create_ticket(requested_user, uname, shared_user_key)
+
+            # Encrypt response with the shared key + 1
+            encrypt_msg = user_timestamp_str + ',' + requested_user + ',' + shared_user_key + ',' + encrypted_keys + ',' + \
+                          ciphertext + ',' + requested_user_pub_key_str + ',' + requested_user_ip + ',' + requested_user_port
+            incr_shared_key = SHA256.new(str( common.increment_key(shared_key) )).digest()
+            encrypted_msg   = common.aes_encrypt(encrypt_msg, incr_shared_key, shared_iv)
+
+            # Encode the response (with ticket) and send it to the client
+            final_msg = common.encode_msg([encrypted_msg])
+            self.socket.sendto(final_msg, self.client_address)
+
+        else:
+            print "Timestamp not current enough"
+            return
+
+    def create_ticket(self, requested_user, requesting_user, shared_user_key):
+        requesting_user_pub_key_str = self.get_user_pub_key(requesting_user).exportKey()
+        requested_user_pub_key      = self.get_user_pub_key(requested_user)
+        requested_user_pub_key_str  = requested_user_pub_key.exportKey()
+        #requested_user_priv_key    = self.get_user_priv_key(requested_user).exportKey()
+        now                         = datetime.datetime.now()
+        expiration_datetime         = (now + datetime.timedelta(days=1)).strftime(fmt)
+
+        # Create a signature
+        iv            = Random.new().read( 16 )
+        signature_msg = SHA256.new(str(iv))
+        signature     = common.sign(signature_msg, server_priv_key)
+
+        # Encrypt with public key of requested user
+        encrypt_msg = common.encode_msg([iv, signature, shared_user_key, requesting_user, requesting_user_pub_key_str, expiration_datetime])
+        encrypted_keys, ciphertext = common.public_key_encrypt(encrypt_msg, requested_user_pub_key)
+        return [encrypted_keys, ciphertext]
+
+    def create_shared_key(self):
+        # Create shared key between users
+        dh1 = diffie_hellman.DiffieHellman()
+        dh2 = diffie_hellman.DiffieHellman()
+        dh1.genPublicKey()
+        dh2.genPublicKey()
+        dh1.genKey(dh2.publicKey)
+        shared_user_key = dh1.getKey()
+        return shared_user_key
+
 
 if __name__ == "__main__":
     try:
