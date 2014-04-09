@@ -27,10 +27,15 @@ BS    = 16
 pad   = lambda s : s + (BS - len(s) % BS) * chr(BS - len(s) % BS)
 unpad = lambda s : s[0:-ord(s[-1])]
 fmt = '%Y-%m-%d %H:%M:%S'
+time_offset = 0
 
-HOST = "localhost"
 if len(sys.argv) > 1:
-    PORT = int(sys.argv[1])
+    HOST = sys.argv[1]
+else:
+    HOST = "localhost"
+
+if len(sys.argv) > 2:
+    PORT = int(sys.argv[2])
 else:
     PORT = 9999
 
@@ -250,6 +255,8 @@ class Client():
             dos_cookie = self.sock.recv(1024)
 
             # Request to talk to given user, sending current timestamp
+            # Please not sure if adding the offset here is legal, please check!!!
+            #timestamp             = (datetime.datetime.now() + time_offset).strftime(fmt)
             timestamp             = datetime.datetime.now().strftime(fmt)
             msg                   = user + "," + timestamp
             encrypted_msg         = common.aes_encrypt(msg, self.shared_key, self.shared_iv)
@@ -351,6 +358,9 @@ class Client():
                 expiration_timestamp = datetime.datetime.strptime(expiration_datetime_str, fmt)
             except ValueError:
                 return
+            # Check offset!!!
+            #if common.is_timestamp_current(expiration_timestamp + time_offset) != True : return
+
             if common.is_timestamp_current(expiration_timestamp) != True : return
             if requesting_user != connected_uname: return
 
@@ -426,6 +436,48 @@ class Client():
         else:
             return
 
+    def sync_clocks(self):
+        # Send the "SYNC" server request
+        self.sock.sendto("SYNC", self.server_address)
+
+        # Receive the dos cookie
+        dos_cookie = self.sock.recv(1024)
+
+        # Send the dos cookie back, along with the username
+        msg = "SYNC," + dos_cookie + "," + self.username
+        self.sock.sendto(msg, (HOST, PORT))
+
+        # Receive an encrypted nonce and decrypt it
+        encrypted_nonce = self.sock.recv(1024)
+        decoded_encrypted_nonce = base64.b64decode(encrypted_nonce)
+        decrypted_nonce = common.aes_decrypt(decoded_encrypted_nonce, self.shared_key, self.shared_iv)
+
+        # Create a new nonce and encrypt with the shared key + 1
+        nonce2 = Random.new().read( 32 )
+        incr_shared_key = SHA256.new(str( common.increment_key(self.shared_key) )).digest()
+        encrypted_nonce2 = common.aes_encrypt(nonce2, incr_shared_key, self.shared_iv)
+
+        # Send the decrypted nonce and encrypted second nonce to the server
+        send_msg = common.encode_msg([decrypted_nonce, encrypted_nonce2])
+        data = common.send_and_receive(send_msg, self.server_address, self.sock, 8192, 2)
+
+        # Check the nonce
+        serv_nonce2 = base64.b64decode( data[0] )
+        if serv_nonce2 != nonce2 : return
+        encrypted_timestamp = base64.b64decode(data[1])
+
+        # Decrypt the timestamp
+        timestamp_str = common.aes_decrypt(encrypted_timestamp, self.shared_key, self.shared_iv)
+        timestamp = ''
+        try:
+            timestamp = datetime.datetime.strptime(timestamp_str, fmt)
+        except ValueError:
+            print "timestamp import issue"
+            return
+
+        # Not sure if this legal, please check it!!!
+        time_offset = datetime.datetime.now() - timestamp
+
     # Print incoming messages to the terminal, has options for line breaks
     def print_message(self, msg, lb_before=False, lb_after=False):
         print '\n' + msg
@@ -475,6 +527,9 @@ while(1):
 
                     if msg[0] == "logout":
                         c.logout()
+
+                    if msg[0] == "sync":
+                        c.sync_clocks()
 
                     if len(msg) == 3:
                         if msg[0] == "send":

@@ -61,7 +61,8 @@ class UDPHandler(SocketServer.BaseRequestHandler):
         self.protocols = {"LOGIN"  : self.login_protocol,
                           "LIST"   : self.list_protocol,
                           "TICKET" : self.ticket_protocol,
-                          "LOGOUT" : self.logout_protocol}
+                          "LOGOUT" : self.logout_protocol,
+                          "SYNC"   : self.clock_sync_protocol}
         SocketServer.BaseRequestHandler.__init__(self,a,b,c)
 
     # Handle an incoming request
@@ -422,6 +423,36 @@ class UDPHandler(SocketServer.BaseRequestHandler):
             print "Invalid Signature"
 
         return
+
+    def clock_sync_protocol(self, data):
+        if len(data) != 1 : return
+
+        # Parse uname and use it to find the shared key
+        uname = data[0]
+        shared_key = connected_clients[uname]['shared_key']
+        shared_iv  = connected_clients[uname]['shared_iv']
+
+        # Create a nonce, encrypt it with the shared key, send it to the client
+        nonce1 = Random.new().read( 32 )
+        encrypted_nonce1 = common.aes_encrypt(nonce1, shared_key, shared_iv)
+
+        encrypt_msg = common.encode_msg([encrypted_nonce1])
+        data = common.send_and_receive(encrypt_msg, self.client_address, self.socket, 1024, 2)
+
+        # Return if nonce doesn't match
+        user_nonce1 = base64.b64decode( data[0] )
+        if nonce1 != user_nonce1 : return
+        encrypted_n2 = base64.b64decode( data[1] )
+
+        # Decrypt the client's nonce
+        incr_shared_key = SHA256.new(str( common.increment_key(shared_key) )).digest()
+        nonce2 = common.aes_decrypt(encrypted_n2, incr_shared_key, shared_iv)
+
+        # Get the current server timestamp and encrypt it
+        timestamp = datetime.datetime.now().strftime(fmt)
+        encrypted_timestamp = common.aes_encrypt(timestamp, shared_key, shared_iv)
+        final_msg = common.encode_msg([nonce2, encrypted_timestamp])
+        self.socket.sendto(final_msg, self.client_address)
 
 
 if __name__ == "__main__":
